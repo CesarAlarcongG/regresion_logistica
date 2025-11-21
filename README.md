@@ -15,19 +15,19 @@ En la terminal, ejecuta:
 
 ```bash
 python -m venv .venv
-
+```
 ## ⭐ 2. Activar el entorno virtual
 
 ```bash
 .venv\Scripts\activate
-
+```
 ## ⭐ 3. descargar las depdencias
 
 ```bash
 pip install -r requirements.txt
-
+```
 ## ⭐ 4. Iniciar el programa 
 
 ```bash
 python {nombre_de_archivo}.py
-
+```
