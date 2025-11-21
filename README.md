@@ -29,5 +29,5 @@ pip install -r requirements.txt
 ## ⭐ 4. Iniciar el programa 
 
 ```bash
-python {nombre_de_archivo}.py
+python app_prediccion.py
 ```
