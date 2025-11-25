@@ -32,7 +32,7 @@ class PredictApp:
         self.scaler = None
         self.last_cm = None         # Última matriz de confusión generada
         self.last_results_df = None # DataFrame con predicciones para exportar
-
+        self.umbral = None        # Umbral de clasificación
         # --- Encabezado ---
         title = tk.Label(root, text="PREDICCIÓN INGRESOS BAJOS/ALTOS (Regresión Logística)",
                          font=("Segoe UI", 16, "bold"), bg="#F0F8FF", fg="#0b5394")
@@ -83,6 +83,7 @@ class PredictApp:
         btns_col = tk.Frame(middle_frame, bg="#F0F8FF")
         btns_col.pack(side="left", padx=12)
 
+        tk.Button(btns_col, text="Mapa de correlacion", command=self.mapa_correlacion, width=28).pack(pady=4)
         tk.Button(btns_col, text="Seleccionar Todo", command=self.select_all, width=28).pack(pady=4)
         tk.Button(btns_col, text="Limpiar Selección", command=self.clear_selection, width=28).pack(pady=4)
         tk.Button(btns_col, text="Seleccionar N Aleatorio", command=self.select_random_n, width=28).pack(pady=4)
@@ -157,13 +158,52 @@ class PredictApp:
             self.listbox.delete(0, tk.END)
             for col in self.columns_list:
                 self.listbox.insert(tk.END, col)
+            
+            # Halla el umbral óptimo (mediana) para clasificación
+            self.umbral = self.encoded_data["IngresoTotal"].median()
+
+            # Agrega un nuevo campo binario basado en el IngresoTotal
+            self.encoded_data["IngresoBinario"] = self.encoded_data["IngresoTotal"].apply(lambda x: 1 if x < self.umbral else 0)
 
             self.status_var.set(f"Archivo cargado: {os.path.basename(file_path)} - {len(self.encoded_data)} filas")
             messagebox.showinfo("Éxito", "Carga completa. Seleccione variables de la lista para continuar.")
-
+        
         except Exception as e:
             messagebox.showerror("Error al cargar", str(e))
             self.status_var.set("Error al cargar archivo")
+
+    
+
+    def mapa_correlacion(self):
+        """Muestra un mapa de calor de correlación en una ventana nueva."""
+        if self.encoded_data is None:
+            messagebox.showwarning("Advertencia", "Cargue un archivo primero.")
+            return
+
+        numeric_data = self.encoded_data.select_dtypes(include=np.number)
+        if numeric_data.empty:
+            messagebox.showwarning("Advertencia", "No hay columnas numéricas para calcular correlación.")
+            return
+
+        corr = numeric_data.corr()
+
+        # Crear ventana secundaria
+        win = tk.Toplevel(self.root)
+        win.title("Mapa de Correlación")
+        win.geometry("900x700")
+        win.configure(bg="#f7fbff")
+
+        # Crear figura y canvas específicos para esta ventana
+        fig, ax = plt.subplots(figsize=(8,6))
+        import seaborn as sns
+        sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", cbar=True, ax=ax)
+        ax.set_title("Mapa de Calor de Correlación", fontsize=14)
+
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+
 
     def select_all(self):
         self.listbox.select_set(0, tk.END)
@@ -351,11 +391,110 @@ class PredictApp:
             self.text_results.insert(tk.END, "\nNota: Al estar escalados, mayor valor absoluto indica mayor importancia relativa.\n")
 
             self.status_var.set(f"Modelo entrenado. Accuracy={acc:.4f} - LogLike={log_likelihood:.4f}")
-
+            self.grafico_regresion_logistica() 
             messagebox.showinfo("Entrenamiento finalizado", "Modelo entrenado exitosamente. Revise la consola para detalles.")
         except Exception as e:
             messagebox.showerror("Error durante entrenamiento", str(e))
             self.status_var.set("Error durante entrenamiento")
+    #-----------------------------Gráfica de regresión logistica---------------------------
+    def grafico_regresion_logistica(self):
+        """Muestra un gráfico de regresión logística para una variable seleccionada por el usuario."""
+        if self.model is None or self.scaler is None or self.last_results_df is None:
+            messagebox.showwarning("Advertencia", "Debe entrenar el modelo antes de graficar.")
+            return
+
+        # Pedir variable al usuario
+        selected_indices = self.listbox.curselection()
+        if len(selected_indices) != 1:
+            messagebox.showwarning("Advertencia", "Debe seleccionar UNA variable numérica para graficar.")
+            return
+
+        var_name = self.listbox.get(selected_indices[0])
+        if var_name not in self.encoded_data.columns:
+            messagebox.showerror("Error", f"La variable seleccionada no existe: {var_name}")
+            return
+
+        if not pd.api.types.is_numeric_dtype(self.encoded_data[var_name]):
+            messagebox.showwarning("Advertencia", f"La variable '{var_name}' no es numérica.")
+            return
+
+        # Extraer datos
+        X_original = self.encoded_data[var_name].copy()
+        y = self.encoded_data["IngresoBin"].copy()
+
+        # Reescalar la columna para aplicar el modelo
+        single_scaled = self.scaler.transform(self.encoded_data[self.scaler.feature_names_in_])
+
+        # índice de la variable dentro del scaler
+        try:
+            var_index = list(self.scaler.feature_names_in_).index(var_name)
+        except:
+            messagebox.showerror("Error", "No se pudo localizar la variable dentro del StandardScaler.")
+            return
+
+        # Crear figura y ventana
+        win = tk.Toplevel(self.root)
+        win.title(f"Regresión Logística - {var_name}")
+        win.geometry("900x650")
+        win.configure(bg="#f7fbff")
+
+        fig, ax = plt.subplots(figsize=(8,6))
+
+        # -------------------------------
+        #     CURVA LOGÍSTICA
+        # -------------------------------
+        x_vals = np.linspace(X_original.min(), X_original.max(), 300)
+        x_vals_scaled = (x_vals - self.scaler.mean_[var_index]) / self.scaler.scale_[var_index]
+
+        # Construir matriz dummy (solo var seleccionada importa)
+        X_dummy = np.zeros((300, len(self.scaler.feature_names_in_)))
+        X_dummy[:, var_index] = x_vals_scaled
+
+        # Coeficientes
+        b0 = float(self.model.intercept_[0])
+        b = self.model.coef_[0]
+
+        logits = b0 + np.dot(X_dummy, b)
+        probs = 1 / (1 + np.exp(-logits))
+
+        # -------------------------------
+        #     PUNTOS REALES
+        # -------------------------------
+        ax.scatter(
+            X_original, y,
+            alpha=0.25,
+            label="Datos reales (Binarios)",
+            color="#0072B2"
+        )
+
+        # Curva logística
+        ax.plot(
+            x_vals,
+            probs,
+            color="red",
+            linewidth=2,
+            label="Curva logística estimada"
+        )
+
+        # -------------------------------
+        #     LÍNEA EN LA MEDIA
+        # -------------------------------
+        media = X_original.mean()
+        ax.axvline(media, color="green", linestyle="--", linewidth=1.5,
+                label=f"Media de {var_name}: {media:.2f}")
+
+        # -------------------------------
+        #     FORMATO
+        # -------------------------------
+        ax.set_title(f"Regresión Logística — Variable: {var_name}", fontsize=14)
+        ax.set_xlabel(var_name, fontsize=12)
+        ax.set_ylabel("Probabilidad de Ingreso Bajo (y=1)", fontsize=12)
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.legend()
+
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
 
     # --------------------------- Gráficos y Ventana Visual ---------------------------
     def open_graph_window(self):
@@ -373,6 +512,7 @@ class PredictApp:
         ctrl_frame.pack(fill="x", padx=8, pady=6)
 
         tk.Button(ctrl_frame, text="Histograma IngresoTotal", command=self.plot_hist_ingreso).pack(side="left", padx=6)
+        tk.Button(ctrl_frame, text="Gráfico de dispersión", command=self.grafico_dispercion).pack(side="left", padx=6)
         tk.Button(ctrl_frame, text="Barras - Promedio por Zona", command=self.plot_bar_promedio_zona).pack(side="left", padx=6)
         tk.Button(ctrl_frame, text="Pie - Distribución DiasSemana", command=self.plot_pie_dias).pack(side="left", padx=6)
         tk.Button(ctrl_frame, text="Dispersión (x,y)", command=self.plot_scatter_select).pack(side="left", padx=6)
@@ -391,14 +531,84 @@ class PredictApp:
         self.fig.clf()            # Limpia toda la figura
         self.ax = self.fig.add_subplot(111)  # Crea un nuevo eje limpio
 
-    def plot_hist_ingreso(self):
-        if self.encoded_data is None: return
-        self.clear_axes()
-        self.ax.hist(self.encoded_data["IngresoTotal"].dropna(), bins=25, color=self.plot_color)
-        self.ax.set_title("Histograma de IngresoTotal")
-        self.ax.set_xlabel("IngresoTotal")
-        self.ax.set_ylabel("Frecuencia")
+    def plot_hist_ingreso(self): 
+        if self.encoded_data is None: 
+            return 
+        self.clear_axes() 
+        self.ax.hist(self.encoded_data["IngresoTotal"].dropna(), bins=25, color=self.plot_color) 
+        self.ax.set_title("Histograma de IngresoTotal") 
+        self.ax.set_xlabel("IngresoTotal") 
+        self.ax.set_ylabel("Frecuencia") 
         self.canvas.draw()
+    
+    def grafico_dispercion(self):
+        """Gráfico de dispersión: X = variables seleccionadas, Y = IngresoTotal, coloreado por IngresoBinario"""
+        if self.encoded_data is None:
+            messagebox.showwarning("Advertencia", "Cargue un archivo primero.")
+            return
+
+        selected_indices = self.listbox.curselection()
+        if len(selected_indices) < 1:
+            messagebox.showwarning("Aviso", "Seleccione al menos 1 columna para graficar.")
+            return
+
+        import seaborn as sns
+        import math
+
+        selected_cols = [self.listbox.get(i) for i in selected_indices]
+        y_col = "IngresoTotal"
+        n = len(selected_cols)
+
+        # Limpiar figura
+        self.clear_axes()
+        self.fig.clear()
+
+        # Caso especial: solo 1 X -> un solo subplot
+        if n == 1:
+            ax = self.fig.add_subplot(1, 1, 1)
+            sns.scatterplot(
+                data=self.encoded_data,
+                x=selected_cols[0],
+                y=y_col,
+                hue="IngresoBinario",
+                palette="coolwarm",
+                ax=ax
+            )
+            ax.set_title(f"{selected_cols[0]} vs {y_col} (coloreado por clase)")
+            self.canvas.draw()
+            return
+
+        # Para 2 o más X -> cuadrícula dinámica
+        cols = 2           # nº de columnas fijo
+        rows = math.ceil(n / cols)  # nº de filas dinámico
+
+        axes = self.fig.subplots(rows, cols)
+        axes = axes.flatten()
+
+        for idx, x_col in enumerate(selected_cols):
+            ax = axes[idx]
+            sns.scatterplot(
+                data=self.encoded_data,
+                x=x_col,
+                y=y_col,
+                hue="IngresoBinario",
+                palette="coolwarm",
+                ax=ax
+            )
+            ax.set_title(f"{x_col} vs {y_col}")
+
+        # Ocultar subplots vacíos
+        for j in range(idx + 1, len(axes)):
+            axes[j].set_visible(False)
+
+        self.fig.suptitle("Gráficos de dispersión (coloreados por IngresoBinario)", fontsize=14)
+        self.fig.tight_layout()
+        self.canvas.draw()
+
+
+
+
+
 
     def plot_bar_promedio_zona(self):
         if self.encoded_data is None: return
