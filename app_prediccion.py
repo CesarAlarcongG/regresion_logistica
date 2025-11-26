@@ -510,7 +510,7 @@ class PredictApp:
         # Pedir variable al usuario
         selected_indices = self.listbox.curselection()
         if len(selected_indices) != 1:
-            messagebox.showwarning("Advertencia", "Debe seleccionar UNA variable numérica para graficar.")
+            messagebox.showwarning("Advertencia", "Debe seleccionar UNA variable numérica para graficar su Regresión Logística.")
             return
 
         var_name = self.listbox.get(selected_indices[0])
@@ -677,7 +677,7 @@ class PredictApp:
                 x=selected_cols[0],
                 y=y_col,
                 hue="IngresoBinario",
-                palette=[self.plot_color, self.generate_shades(self.plot_color, 2)[-1]] if "IngresoBinario" in self.encoded_data.columns else [self.plot_color],
+                palette=[self.plot_color, '#000000'] if "IngresoBinario" in self.encoded_data.columns else [self.plot_color],
                 ax=ax
             )
             ax.set_title(f"{selected_cols[0]} vs {y_col} (coloreado por clase)")
@@ -686,7 +686,7 @@ class PredictApp:
 
         # Si n > 1: crear ventana nueva con canvas + botones a la derecha
         win = tk.Toplevel(self.root)
-        win.title("Gráficos de Dispersión — vista por variable")
+        win.title("Gráficos de Dispersión — Vista por Variable")
         win.geometry("1200x600")
         win.state("zoomed")
         win.resizable(False, False)
@@ -708,7 +708,7 @@ class PredictApp:
             ax.clear()
             # si hay IngresoBinario, colorear por clase usando tonos derivados
             if "IngresoBinario" in self.encoded_data.columns:
-                pal = [self.plot_color, self.generate_shades(self.plot_color, 2)[-1]]
+                pal = [self.plot_color, '#000000']
                 sns.scatterplot(data=self.encoded_data, x=x_col, y=y_col, hue="IngresoBinario", palette=pal, ax=ax, alpha=0.7)
                 ax.legend(title="Clase")
             else:
