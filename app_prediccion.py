@@ -9,6 +9,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.colors as mcolors
+from matplotlib.colors import LinearSegmentedColormap
 import os
 
 # --- Archivo: app_prediccion.py ---
@@ -20,6 +22,7 @@ class PredictApp:
         self.root = root
         self.root.title("Sistema de Predicción Retail - Regresión Logística")
         self.root.geometry("1280x720")
+        self.root.state("zoomed")
         self.root.configure(bg="#F0F8FF")
 
         # Variables de estado para datos y modelo
@@ -83,7 +86,7 @@ class PredictApp:
         btns_col = tk.Frame(middle_frame, bg="#F0F8FF")
         btns_col.pack(side="left", padx=12)
 
-        tk.Button(btns_col, text="Mapa de correlacion", command=self.mapa_correlacion, width=28).pack(pady=4)
+        tk.Button(btns_col, text="Mapa de correlacion", command=self.mapa_correlacion, width=28).pack(pady=8)
         tk.Button(btns_col, text="Seleccionar Todo", command=self.select_all, width=28).pack(pady=4)
         tk.Button(btns_col, text="Limpiar Selección", command=self.clear_selection, width=28).pack(pady=4)
         tk.Button(btns_col, text="Seleccionar N Aleatorio", command=self.select_random_n, width=28).pack(pady=4)
@@ -111,11 +114,55 @@ class PredictApp:
         status.pack(fill="x", padx=12, pady=(0,6))
 
     # --------------------------- Utilidades ---------------------------
+    # ------------------------ Colores y paletas -----------------------
     def choose_color(self):
-        """Abre un diálogo para seleccionar el color principal de los gráficos."""
+        """Abre diálogo y guarda color + paletas derivadas."""
         color = colorchooser.askcolor(title="Elige color principal para gráficos")
         if color and color[1]:
             self.plot_color = color[1]
+            # generar paletas rápidas (6 tonos para pie por ejemplo)
+            self._pie_shades = self.generate_shades(self.plot_color, 6)
+            # cmap para heatmap
+            self._heatmap_cmap = self.generate_diverging_cmap(self.plot_color)
+            # si quieres forzar repintado de canvas actual:
+            try:
+                self.canvas.draw()
+            except:
+                pass
+
+    def hex_to_rgb(self, hex_color):
+        """Devuelve tupla (r,g,b) en rango 0..1 para matplotlib."""
+        return mcolors.to_rgb(hex_color)
+
+    def rgb_to_hex(self, rgb):
+        """Convierte (r,g,b) 0..1 a '#rrggbb'."""
+        return mcolors.to_hex(rgb)
+
+    def generate_shades(self, base_hex, n):
+        """
+        Genera n tonos (del más oscuro al más claro) basados en base_hex.
+        Retorna lista de hex.
+        """
+        base_rgb = mcolors.to_rgb(base_hex)
+        # mezclamos entre base y blanco para producir tonos
+        shades = []
+        for i in range(n):
+            t = i / max(n-1, 1)  # 0..1
+            # hacemos que t=0 -> base, t=1 -> más claro (hacia blanco)
+            mixed = tuple((1 - t) * c + t * 1.0 for c in base_rgb)
+            shades.append(mcolors.to_hex(mixed))
+        return shades
+
+    def generate_diverging_cmap(self, base_hex, n=256):
+        """
+        Crea un cmap diverging/fill para heatmap partiendo del color base.
+        Se genera un gradiente desde color más oscuro hasta color más claro.
+        """
+        base_rgb = mcolors.to_rgb(base_hex)
+        # crear color oscuro (mezclado con negro) y color claro (mezclado con blanco)
+        dark = tuple(c * 0.3 for c in base_rgb)
+        light = tuple((c + 1.0)/2.0 for c in base_rgb)  # hacia blanco
+        return LinearSegmentedColormap.from_list("customcmap", [dark, base_rgb, light], N=n)
 
     def load_file(self):
         """Carga datos desde CSV o Excel, limpia texto y aplica One-Hot Encoding."""
@@ -172,10 +219,9 @@ class PredictApp:
             messagebox.showerror("Error al cargar", str(e))
             self.status_var.set("Error al cargar archivo")
 
-    
-
     def mapa_correlacion(self):
-        """Muestra un mapa de calor de correlación en una ventana nueva."""
+        """Muestra un mapa de calor de correlación centrado, horizontal y con scrollbars."""
+
         if self.encoded_data is None:
             messagebox.showwarning("Advertencia", "Cargue un archivo primero.")
             return
@@ -185,25 +231,82 @@ class PredictApp:
             messagebox.showwarning("Advertencia", "No hay columnas numéricas para calcular correlación.")
             return
 
+        import seaborn as sns
+
         corr = numeric_data.corr()
 
-        # Crear ventana secundaria
+        # ------------------- VENTANA FULLSCREEN -------------------
         win = tk.Toplevel(self.root)
         win.title("Mapa de Correlación")
-        win.geometry("900x700")
+        win.state("zoomed")
+        win.resizable(False, False)
         win.configure(bg="#f7fbff")
 
-        # Crear figura y canvas específicos para esta ventana
-        fig, ax = plt.subplots(figsize=(8,6))
-        import seaborn as sns
-        sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", cbar=True, ax=ax)
-        ax.set_title("Mapa de Calor de Correlación", fontsize=14)
+        # Tamaño pantalla
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
 
-        canvas = FigureCanvasTkAgg(fig, master=win)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        # ------------------- SCROLL ÁREA -------------------
+        container = tk.Frame(win, bg="#f7fbff")
+        container.pack(fill="both", expand=True)
 
+        canvas = tk.Canvas(container, bg="#f7fbff", highlightthickness=0)
+        canvas.pack(side="left", fill="both", expand=True)
 
+        v_scroll = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        h_scroll = tk.Scrollbar(container, orient="horizontal", command=canvas.xview)
+        v_scroll.pack(side="right", fill="y")
+        h_scroll.pack(side="bottom", fill="x")
+
+        canvas.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+
+        # frame interno
+        frame_plot = tk.Frame(canvas, bg="#f7fbff")
+        canvas_window = canvas.create_window((0, 0), window=frame_plot, anchor="n")
+
+        # region scroll
+        def update_scroll(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # centrar horizontalmente
+            canvas.itemconfig(canvas_window, width=canvas.winfo_width())
+
+        frame_plot.bind("<Configure>", update_scroll)
+        canvas.bind("<Configure>", update_scroll)
+
+        # ---------------- FIGURA ----------------
+        n = corr.shape[0]
+
+        # NUEVO: figura más horizontal y menos alta
+        figsize_x = max(10, min(40, n * 0.9))   # ancho incrementado
+        figsize_y = max(6, min(20, n * 0.55))   # alto moderado
+
+        fig, ax = plt.subplots(figsize=(figsize_x, figsize_y))
+
+        cmap = getattr(self, "_heatmap_cmap", None)
+        if cmap is None:
+            cmap = self.generate_diverging_cmap(self.plot_color)
+
+        sns.set(font_scale=0.8)
+
+        sns.heatmap(
+            corr,
+            annot=True,
+            fmt=".2f",
+            cmap=cmap,
+            cbar=True,
+            ax=ax,
+            annot_kws={"size": 7}
+        )
+
+        ax.tick_params(axis="both", labelsize=8)
+        ax.set_title("Mapa de Calor de Correlación", fontsize=14, pad=20)
+
+        fig.tight_layout(pad=2)
+
+        # colocar figura dentro del frame
+        fig_canvas = FigureCanvasTkAgg(fig, master=frame_plot)
+        fig_canvas.draw()
+        fig_canvas.get_tk_widget().pack(pady=20)   # centrado vertical con margen
 
     def select_all(self):
         self.listbox.select_set(0, tk.END)
@@ -396,6 +499,7 @@ class PredictApp:
         except Exception as e:
             messagebox.showerror("Error durante entrenamiento", str(e))
             self.status_var.set("Error durante entrenamiento")
+
     #-----------------------------Gráfica de regresión logistica---------------------------
     def grafico_regresion_logistica(self):
         """Muestra un gráfico de regresión logística para una variable seleccionada por el usuario."""
@@ -435,7 +539,9 @@ class PredictApp:
         # Crear figura y ventana
         win = tk.Toplevel(self.root)
         win.title(f"Regresión Logística - {var_name}")
-        win.geometry("900x650")
+        win.geometry("1200x600")
+        win.state("zoomed")
+        win.resizable(False, False)
         win.configure(bg="#f7fbff")
 
         fig, ax = plt.subplots(figsize=(8,6))
@@ -504,7 +610,9 @@ class PredictApp:
             return
         win = tk.Toplevel(self.root)
         win.title("Dashboard de Visualización")
-        win.geometry("1000x800")
+        win.geometry("1200x600")
+        win.state("zoomed")
+        win.resizable(False, False)
         win.configure(bg="#f7fbff")
 
         # Panel de botones gráficos
@@ -512,11 +620,11 @@ class PredictApp:
         ctrl_frame.pack(fill="x", padx=8, pady=6)
 
         tk.Button(ctrl_frame, text="Histograma IngresoTotal", command=self.plot_hist_ingreso).pack(side="left", padx=6)
-        tk.Button(ctrl_frame, text="Gráfico de dispersión", command=self.grafico_dispercion).pack(side="left", padx=6)
+        tk.Button(ctrl_frame, text="Gráficos de Dispersión (IngresoTotal)", command=self.grafico_dispersion).pack(side="left", padx=6)
         tk.Button(ctrl_frame, text="Barras - Promedio por Zona", command=self.plot_bar_promedio_zona).pack(side="left", padx=6)
         tk.Button(ctrl_frame, text="Pie - Distribución DiasSemana", command=self.plot_pie_dias).pack(side="left", padx=6)
-        tk.Button(ctrl_frame, text="Dispersión (x,y)", command=self.plot_scatter_select).pack(side="left", padx=6)
-        tk.Button(ctrl_frame, text="Matriz Confusión (última)", command=lambda: self.plot_confusion(self.last_cm)).pack(side="left", padx=6)
+        tk.Button(ctrl_frame, text="Gráficos de Dispersión (Elegir)", command=self.plot_scatter_select).pack(side="left", padx=6)
+        tk.Button(ctrl_frame, text="Matriz de Confusión", command=lambda: self.plot_confusion(self.last_cm)).pack(side="left", padx=6)
 
         # Área de dibujo (Matplotlib backend)
         fig_frame = tk.Frame(win, bg="#f7fbff")
@@ -531,18 +639,19 @@ class PredictApp:
         self.fig.clf()            # Limpia toda la figura
         self.ax = self.fig.add_subplot(111)  # Crea un nuevo eje limpio
 
-    def plot_hist_ingreso(self): 
-        if self.encoded_data is None: 
-            return 
-        self.clear_axes() 
-        self.ax.hist(self.encoded_data["IngresoTotal"].dropna(), bins=25, color=self.plot_color) 
-        self.ax.set_title("Histograma de IngresoTotal") 
-        self.ax.set_xlabel("IngresoTotal") 
-        self.ax.set_ylabel("Frecuencia") 
+    def plot_hist_ingreso(self):
+        if self.encoded_data is None:
+            return
+        self.clear_axes()
+        color = getattr(self, "plot_color", "#0b5394")
+        self.ax.hist(self.encoded_data["IngresoTotal"].dropna(), bins=25, color=color, edgecolor="white")
+        self.ax.set_title("Histograma de IngresoTotal")
+        self.ax.set_xlabel("IngresoTotal")
+        self.ax.set_ylabel("Frecuencia")
         self.canvas.draw()
     
-    def grafico_dispercion(self):
-        """Gráfico de dispersión: X = variables seleccionadas, Y = IngresoTotal, coloreado por IngresoBinario"""
+    def grafico_dispersion(self):
+        """Gráfico de dispersión: si hay >1 variable, abre ventana con botones a la derecha para ver un gráfico a la vez."""
         if self.encoded_data is None:
             messagebox.showwarning("Advertencia", "Cargue un archivo primero.")
             return
@@ -559,69 +668,82 @@ class PredictApp:
         y_col = "IngresoTotal"
         n = len(selected_cols)
 
-        # Limpiar figura
-        self.clear_axes()
-        self.fig.clear()
-
-        # Caso especial: solo 1 X -> un solo subplot
+        # Caso n == 1: reproducir comportamiento anterior (ventana única con scatter)
         if n == 1:
-            ax = self.fig.add_subplot(1, 1, 1)
+            self.clear_axes()
+            ax = self.ax
             sns.scatterplot(
                 data=self.encoded_data,
                 x=selected_cols[0],
                 y=y_col,
                 hue="IngresoBinario",
-                palette="coolwarm",
+                palette=[self.plot_color, self.generate_shades(self.plot_color, 2)[-1]] if "IngresoBinario" in self.encoded_data.columns else [self.plot_color],
                 ax=ax
             )
             ax.set_title(f"{selected_cols[0]} vs {y_col} (coloreado por clase)")
             self.canvas.draw()
             return
 
-        # Para 2 o más X -> cuadrícula dinámica
-        cols = 2           # nº de columnas fijo
-        rows = math.ceil(n / cols)  # nº de filas dinámico
+        # Si n > 1: crear ventana nueva con canvas + botones a la derecha
+        win = tk.Toplevel(self.root)
+        win.title("Gráficos de Dispersión — vista por variable")
+        win.geometry("1200x600")
+        win.state("zoomed")
+        win.resizable(False, False)
+        win.configure(bg="#f7fbff")
 
-        axes = self.fig.subplots(rows, cols)
-        axes = axes.flatten()
+        # frames
+        left_frame = tk.Frame(win, bg="#f7fbff")
+        left_frame.pack(side="left", fill="both", expand=True)
+        right_frame = tk.Frame(win, bg="#f7fbff", width=220)
+        right_frame.pack(side="right", fill="y")
 
-        for idx, x_col in enumerate(selected_cols):
-            ax = axes[idx]
-            sns.scatterplot(
-                data=self.encoded_data,
-                x=x_col,
-                y=y_col,
-                hue="IngresoBinario",
-                palette="coolwarm",
-                ax=ax
-            )
+        # figura matplolib en left_frame
+        fig, ax = plt.subplots(figsize=(8,6))
+        canvas = FigureCanvasTkAgg(fig, master=left_frame)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        # función para pintar una variable concreta
+        def plot_single(x_col):
+            ax.clear()
+            # si hay IngresoBinario, colorear por clase usando tonos derivados
+            if "IngresoBinario" in self.encoded_data.columns:
+                pal = [self.plot_color, self.generate_shades(self.plot_color, 2)[-1]]
+                sns.scatterplot(data=self.encoded_data, x=x_col, y=y_col, hue="IngresoBinario", palette=pal, ax=ax, alpha=0.7)
+                ax.legend(title="Clase")
+            else:
+                ax.scatter(self.encoded_data[x_col], self.encoded_data[y_col], color=self.plot_color, alpha=0.7)
             ax.set_title(f"{x_col} vs {y_col}")
+            ax.grid(True, linestyle="--", alpha=0.3)
+            fig.tight_layout()
+            canvas.draw()
 
-        # Ocultar subplots vacíos
-        for j in range(idx + 1, len(axes)):
-            axes[j].set_visible(False)
+        # crear botones en right_frame
+        lbl = tk.Label(right_frame, text="Variables (mostrar 1):", bg="#f7fbff")
+        lbl.pack(pady=(8,4))
+        for col in selected_cols:
+            b = tk.Button(right_frame, text=col, width=25, command=lambda c=col: plot_single(c))
+            b.pack(pady=3)
 
-        self.fig.suptitle("Gráficos de dispersión (coloreados por IngresoBinario)", fontsize=14)
-        self.fig.tight_layout()
-        self.canvas.draw()
+        # botón para cerrar/volver (opcional)
+        tk.Button(right_frame, text="Cerrar", command=win.destroy).pack(side="bottom", pady=8)
 
-
-
-
-
+        # plot primer gráfico por defecto
+        plot_single(selected_cols[0])
 
     def plot_bar_promedio_zona(self):
         if self.encoded_data is None: return
-        # Intenta usar la columna 'Zona' original antes del encoding
         if "Zona" in self.data.columns:
             df = self.data.groupby("Zona")["IngresoTotal"].mean().reset_index()
             x = df["Zona"]
             y = df["IngresoTotal"]
             self.clear_axes()
-            self.ax.bar(x, y, color=self.plot_color)
+            color = getattr(self, "plot_color", "#0b5394")
+            bars = self.ax.bar(x, y, color=color, edgecolor="white")
             self.ax.set_title("Ingreso Promedio por Zona")
             self.ax.set_ylabel("Ingreso Promedio")
             self.ax.set_xticklabels(x, rotation=45, ha="right")
+            self.fig.tight_layout()
             self.canvas.draw()
         else:
             messagebox.showwarning("Aviso", "La columna 'Zona' original no está disponible.")
@@ -631,52 +753,78 @@ class PredictApp:
         if "DiaSemana" in self.data.columns:
             counts = self.data["DiaSemana"].value_counts()
             self.clear_axes()
-            self.ax.pie(counts.values, labels=counts.index, autopct="%1.1f%%")
+            # obtener tonos (si no existen, generarlos)
+            shades = getattr(self, "_pie_shades", None)
+            if shades is None or len(shades) < len(counts):
+                shades = self.generate_shades(self.plot_color, max(6, len(counts)))
+            # limitar a n
+            colors = shades[:len(counts)]
+            wedges, texts, autotexts = self.ax.pie(counts.values, labels=counts.index, autopct="%1.1f%%", colors=colors, startangle=90)
+            # mejorar contraste del texto del % si es necesario
+            for txt in autotexts:
+                txt.set_color("black")
             self.ax.set_title("Distribución por Día de la Semana")
+            self.ax.axis("equal")
+            self.fig.tight_layout()
             self.canvas.draw()
         else:
             messagebox.showwarning("Aviso", "La columna 'DiaSemana' original no está disponible.")
 
     def plot_scatter_select(self):
-        """Permite al usuario elegir dos variables para un gráfico de dispersión."""
         if self.encoded_data is None: return
-        
-        # Filtrar solo columnas numéricas
         numeric_cols = [c for c in self.encoded_data.columns if pd.api.types.is_numeric_dtype(self.encoded_data[c]) and c!="IngresoTotal"]
         if len(numeric_cols) < 2:
             messagebox.showwarning("Aviso", "No hay suficientes columnas numéricas para scatter.")
             return
-            
+
         sel = simpledialog.askstring("Scatter", f"Ingrese 2 columnas separadas por coma (ej: {numeric_cols[0]},{numeric_cols[1]})")
         if not sel: return
-        
+
         parts = [s.strip() for s in sel.split(",")]
         if len(parts) != 2 or parts[0] not in numeric_cols or parts[1] not in numeric_cols:
             messagebox.showerror("Error", "Columnas inválidas o no encontradas.")
             return
-            
+
         xcol, ycol = parts[0], parts[1]
         self.clear_axes()
-        self.ax.scatter(self.encoded_data[xcol], self.encoded_data[ycol], color=self.plot_color, alpha=0.6)
+        color = getattr(self, "plot_color", "#0b5394")
+        self.ax.scatter(self.encoded_data[xcol], self.encoded_data[ycol], color=color, alpha=0.6)
         self.ax.set_xlabel(xcol); self.ax.set_ylabel(ycol)
         self.ax.set_title(f"Dispersión: {xcol} vs {ycol}")
         self.canvas.draw()
 
     def plot_confusion(self, cm):
-        """Dibuja la matriz de confusión en el área principal."""
+        """Dibuja la matriz de confusión usando el color elegido por el usuario."""
         if cm is None:
             messagebox.showwarning("Aviso", "No hay matriz de confusión. Entrene el modelo primero.")
             return
+
         self.clear_axes()
         cm = np.array(cm)
-        im = self.ax.imshow(cm, cmap="Blues")
-        # Anotaciones de texto sobre la matriz
+
+        # Usar el colormap derivado del color elegido
+        cmap = getattr(self, "_heatmap_cmap", None)
+        if cmap is None:
+            cmap = self.generate_diverging_cmap(self.plot_color)
+
+        # Dibujar matriz
+        im = self.ax.imshow(cm, cmap=cmap)
+
+        # Anotaciones sobre cada celda
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
-                self.ax.text(j, i, cm[i, j], ha="center", va="center", color="black")
-        self.ax.set_title("Matriz de Confusión")
+                value = cm[i, j]
+                text_color = "black"
+                self.ax.text(j, i, value, ha="center", va="center", color=text_color, fontsize=12)
+
+        self.ax.set_title("Matriz de Confusión", fontsize=14)
         self.ax.set_xlabel("Predicción")
         self.ax.set_ylabel("Real")
+
+        # Barra de color
+        self.fig.colorbar(im, ax=self.ax)
+
+        self.fig.tight_layout()
         self.canvas.draw()
 
     # --------------------------- Popup Matriz Confusión ---------------------------
@@ -710,7 +858,6 @@ class PredictApp:
                 messagebox.showinfo("Guardado", f"Resultados guardados en: {save}")
             except Exception as e:
                 messagebox.showerror("Error al guardar", str(e))
-
 
 if __name__ == "__main__":
     root = tk.Tk()
